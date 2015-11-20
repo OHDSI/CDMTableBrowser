@@ -1,0 +1,290 @@
+
+<!DOCTYPE html>
+<meta charset="utf-8">
+<style>
+
+.node {
+  cursor: pointer;
+}
+
+.node circle {
+  fill: #fff;
+  stroke: steelblue;
+  stroke-width: 1.5px;
+}
+
+.node text {
+  font: 10px sans-serif;
+}
+
+.link {
+  fill: none;
+  stroke: #ccc;
+  stroke-width: 1.5px;
+}
+
+div.tooltip {
+  position: absolute;
+  text-align: center;
+  width: 100px;
+  height: 10px;
+  padding: 8px;
+  font: 10px sans-serif;
+  background: #ffff99;
+  border: solid 1px #aaa;
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+</style>
+<body>
+<script src="http://d3js.org/d3.v3.min.js"></script>
+<script  charset="UTF-8" >
+
+Array.prototype.getUnique = function(){
+   var u = {}, a = [];
+   for(var i = 0, l = this.length; i < l; ++i){
+      if(u.hasOwnProperty(this[i])) {
+         continue;
+      }
+      a.push(this[i]);
+      u[this[i]] = 1;
+   }
+   return a;
+}
+
+var margin = {top: 20, right: 120, bottom: 20, left: 120},
+    width = 960 - margin.right - margin.left,
+    height = 800 - margin.top - margin.bottom;
+
+var i = 0,
+    duration = 750,
+    root;
+
+var tree = d3.layout.tree()
+    .size([height, width]);
+
+var diagonal = d3.svg.diagonal()
+    .projection(function(d) { return [d.y, d.x]; });
+
+var svg = d3.select("body").append("svg")
+    .attr("width", width + margin.right + margin.left)
+    .attr("height", height + margin.top + margin.bottom)
+  .append("g")
+    .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+var pks = {};
+	
+d3.json("./OMOPtables/", function(error, tableInfoPre) {
+  var tableInfo = [];
+  var tmp = tableInfoPre['java']['array']['void'];
+  for(var i = 0; i !== tmp.length; i++){
+    var nltmp = tmp[i]['object']['void'];
+	tmphash = {};
+	tmphash['description'] = nltmp[1]['string'];
+	tmphash['table_name'] = nltmp[2]['string'];
+	tableInfo.push(tmphash);
+  }
+  console.log(tableInfo);
+  d3.json("./OMOPfields/", function(error, columnInfoPre) {
+	var columnInfo = [];
+	var tmp = columnInfoPre['java']['array']['void'];
+	for(var i = 0; i !== tmp.length; i++){
+		var nltmp = tmp[i]['object']['void'];
+		tmphash = {};
+		tmphash['description'] = nltmp[0]['string'];
+		tmphash['table_name'] = nltmp[3]['string'];
+		tmphash['field_name'] = nltmp[1]['string'];
+		columnInfo.push(tmphash);
+	}
+    var out = {};
+    out.x0 = 0;
+    out.y0 = 0;
+    out.depth = 0;
+    out.label = "OMOP CDM";
+    out.children = new Array();
+	out.type = 'title';
+	out.linked = false;
+
+    var lookup = {};
+    var descriptions = {};
+    for(var i = 0; i !== tableInfo.length; i++){
+      var table_info_row = tableInfo[i];
+      var table_name = table_info_row["table_name"];
+      var description = table_info_row["description"];
+      lookup[table_name] = null;
+      descriptions[table_name] = description;
+    }
+
+    for(var i = 0; i !== columnInfo.length; i++){
+      var table_info_row = columnInfo[i];
+      var table_name = table_info_row["table_name"];
+      var field_name = table_info_row["field_name"];
+      var description = table_info_row["description"];
+      if(table_name in lookup){
+        if(lookup[table_name]){
+          lookup[table_name].push([field_name, description]);
+        }else{
+          lookup[table_name] = [[field_name, description]];
+        }
+		if(description.match(/unique identifier/) !== null){
+			pks[field_name] = table_name;
+		}
+      }
+    }
+
+    //Keep only unique
+    for (var concept in lookup) {
+      var tmp = new Array();
+      lookup[concept]=lookup[concept].filter(function (value, index, ar) {
+        if(tmp.indexOf(value[0]) > -1){
+          return false;
+        }else{
+          tmp.push(value[0]);
+          return true;
+        } 
+      });
+    }
+
+    for(var concept in lookup) {
+      var concept_hash = {
+        label: concept,
+		type: 'table',
+		linked: false,
+        _children: new Array(),
+        description: descriptions[concept]
+      };
+      for(var i = 0; i !== lookup[concept].length; i++){
+        concept_hash['_children'].push({
+          label: lookup[concept][i][0],
+          depth: 2,
+		  type: 'field',
+		  linked: false,
+          description: lookup[concept][i][1]
+        });
+      }
+      out.children.push(concept_hash);
+    }
+    console.log(out);
+    root = out;
+  // method which find the children of a node
+    tree.nodes(root);
+    tree.children(function children(d) {  return d.children; }); // restore the standard walk in the tree
+
+    update(out);
+  });
+});
+
+var clicked = false;
+
+d3.select(self.frameElement).style("height", "800px");
+
+function update(source) {
+
+  // Compute the new tree layout.
+  var nodes = tree.nodes(root).reverse(),
+      links = tree.links(nodes);
+
+  // Normalize for fixed-depth.
+  nodes.forEach(function(d) { d.y = d.depth * 180; });
+
+  // Update the nodes…
+  var node = svg.selectAll("g.node")
+      .data(nodes, function(d) { return d.id || (d.id = ++i); });
+
+  // Enter any new nodes at the parent's previous position.
+  var nodeEnter = node.enter().append("g")
+      .attr("class", "node")
+      .attr("transform", function(d) { return "translate(" + source.y0 + "," + source.x0 + ")"; })
+      .on("click", click);
+
+  nodeEnter.append("circle")
+      .attr("r", 1e-6)
+      .style("fill", function(d) { return d._children ? "lightsteelblue" : "#fff"; });
+
+  nodeEnter.append("text")
+      .attr("x", function(d) { return d.children || d._children ? -10 : 10; })
+      .attr("dy", ".35em")
+      .attr("text-anchor", function(d) { return d.children || d._children ? "end" : "start"; })
+      .text(function(d) { return d.label; })
+      .style("fill-opacity", 1e-6);
+
+  // Transition nodes to their new position.
+  var nodeUpdate = node.transition()
+      .duration(duration)
+      .attr("transform", function(d) { return "translate(" + d.y + "," + d.x + ")"; });
+
+  nodeUpdate.select("circle")
+      .attr("r", 4.5)
+      .style("fill", function(d) { return d._children ? "lightsteelblue" : "#fff"; });
+
+  nodeUpdate.select("text")
+      .style("fill-opacity", 1);
+
+  // Transition exiting nodes to the parent's new position.
+  var nodeExit = node.exit().transition()
+      .duration(duration)
+      .attr("transform", function(d) { return "translate(" + source.y + "," + source.x + ")"; })
+      .remove();
+
+  nodeExit.select("circle")
+      .attr("r", 1e-6);
+
+  nodeExit.select("text")
+      .style("fill-opacity", 1e-6);
+
+  // Update the links…
+  var link = svg.selectAll("path.link")
+      .data(links, function(d) { return d.target.id; });
+
+  // Enter any new links at the parent's previous position.
+  link.enter().insert("path", "g")
+      .attr("class", "link")
+      .attr("d", function(d) {
+        var o = {x: source.x0, y: source.y0};
+        return diagonal({source: o, target: o});
+      });
+
+  // Transition links to their new position.
+  link.transition()
+      .duration(duration)
+      .attr("d", diagonal);
+
+  // Transition exiting nodes to the parent's new position.
+  link.exit().transition()
+      .duration(duration)
+      .attr("d", function(d) {
+        var o = {x: source.x, y: source.y};
+        return diagonal({source: o, target: o});
+      })
+      .remove();
+
+  // Stash the old positions for transition.
+  nodes.forEach(function(d) {
+    d.x0 = d.x;
+    d.y0 = d.y;
+  });
+}
+
+// Toggle children on click.
+function click(d) {
+  if (d.children) {
+    d._children = d.children;
+    d.children = null;
+  } else {
+    d.children = d._children;
+    d._children = null;
+  }
+  update(d);
+}
+
+function color(d) {
+  if(d.linked){
+    return d.label in pks ? '#00CC00' : '#ffff00';
+  }
+  return d._children ? "#3182bd" : d.children ? "#c6dbef" : "#fd8d3c";
+}
+
+</script>
+</body>
+</html>
